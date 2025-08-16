@@ -17,7 +17,6 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # Base SDK only; we install packages explicitly
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -28,16 +27,13 @@ jobs:
         shell: bash
         run: |
           set -eux
-          SDKMANAGER="${ANDROID_HOME:?}/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "$SDKMANAGER" ]; then
+          SDKMANAGER="${ANDROID_HOME:?}/cmdline-tools/latest/bin/sdkmanager" || true
+          if [ ! -x "${SDKMANAGER:-}" ]; then
             SDKMANAGER=$(ls -d "${ANDROID_HOME}/cmdline-tools/"*/bin 2>/dev/null | head -n1)/sdkmanager
           fi
-          # Accept licenses non-interactively
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          # Install required components
           "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      # Install and USE Gradle 8.2.1 (compatible with AGP 8.2.x)
       - name: Install Gradle 8.2.1
         shell: bash
         run: |
@@ -46,25 +42,21 @@ jobs:
           sdk install gradle 8.2.1
           sdk use gradle 8.2.1
           echo "GRADLE_BIN=$HOME/.sdkman/candidates/gradle/8.2.1/bin/gradle" >> $GITHUB_ENV
-          $HOME/.sdkman/candidates/gradle/8.2.1/bin/gradle -v
+          "$HOME/.sdkman/candidates/gradle/8.2.1/bin/gradle" -v
 
-      # Find your upload ZIP and unzip inner project
       - name: Locate and unzip upload
+        shell: bash
         run: |
+          set -eux
           ls -lah
-          ZIP=$(ls -1 *.zip 2>/dev/null | head -n1 || true)
-          if [ -z "$ZIP" ]; then
-            echo "❌ No *.zip found in repo root"; exit 1
-          fi
+          ZIP=$(ls -1 *.zip 2>/dev/null | head -n1)
+          echo "Found upload zip: $ZIP"
           unzip -q "$ZIP" -d upload_content
-          INNER=$(find upload_content -maxdepth 2 -type f -name '*ColourQuestProject.zip' -print -quit)
-          if [ -z "$INNER" ]; then
-            echo "❌ Inner project zip not found"; find upload_content -type f -name '*.zip' -print; exit 1
-          fi
+          INNER=$(find upload_content -maxdepth 2 -type f -name '*ColourQuestProject*.zip' -print -quit)
+          echo "Inner project zip: ${INNER:-NOT FOUND}"
           unzip -q "$INNER" -d ColourQuest
           ls -lah ColourQuest
 
-      # Add gradle.properties so AndroidX is enabled
       - name: Ensure gradle.properties (AndroidX)
         run: |
           cat > ColourQuest/gradle.properties <<'EOF'
@@ -72,8 +64,23 @@ jobs:
           kotlin.code.style=official
           org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
           EOF
-          echo "== gradle.properties =="
-          cat ColourQuest/gradle.properties
+          sed -n '1,200p' ColourQuest/gradle.properties
+
+      # Safety patch (won't duplicate if already present)
+      - name: Ensure Material Components dependency
+        run: |
+          FILE="ColourQuest/app/build.gradle"
+          if ! grep -q "com.google.android.material:material" "$FILE"; then
+            awk '
+              BEGIN{added=0}
+              {print}
+              /dependencies[[:space:]]*\{/ && added==0 {
+                print "    implementation '\''com.google.android.material:material:1.12.0'\''"
+                added=1
+              }
+            ' "$FILE" > /tmp/gradle.patched && mv /tmp/gradle.patched "$FILE"
+          fi
+          sed -n "/dependencies[[:space:]]*{/,/}/p" "$FILE"
 
       - name: Build debug APK
         working-directory: ColourQuest
