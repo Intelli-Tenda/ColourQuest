@@ -1,4 +1,4 @@
-name: Build ColourQuest APK (stable toolchain)
+name: Build ColourQuest APK (diagnostic)
 
 on:
   workflow_dispatch:
@@ -60,7 +60,7 @@ jobs:
           org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
           EOF
 
-      # Overwrite app/build.gradle with a stable setup (Kotlin 1.9.24 + Compose compiler 1.5.14)
+      # Stable toolchain
       - name: Write app/build.gradle (stable)
         run: |
           cat > ColourQuest/app/build.gradle <<'EOF'
@@ -84,6 +84,7 @@ jobs:
                       minifyEnabled false
                       proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
                   }
+                  debug { debuggable true }
               }
               buildFeatures { compose true }
               composeOptions { kotlinCompilerExtensionVersion '1.5.14' }
@@ -94,31 +95,71 @@ jobs:
               }
               packaging { resources { excludes += '/META-INF/{AL2.0,LGPL2.1}' } }
           }
-          // Hard-enforce Java 17 for any Java tasks
           tasks.withType(JavaCompile).configureEach {
               sourceCompatibility = JavaVersion.VERSION_17
               targetCompatibility = JavaVersion.VERSION_17
               if (it.options.hasProperty("release")) it.options.release = 17
           }
           dependencies {
-              // Compose 1.6.8 via BOM
               implementation platform('androidx.compose:compose-bom:2024.06.00')
               implementation 'androidx.compose.ui:ui'
               implementation 'androidx.compose.ui:ui-tooling-preview'
               implementation 'androidx.compose.material3:material3'
-
               implementation 'androidx.activity:activity-compose:1.9.3'
               implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.4'
               implementation 'androidx.core:core-ktx:1.13.1'
-
-              // XML theme needs MDC (Theme.Material3.*)
-              implementation 'com.google.android.material:material:1.12.0'
-
+              implementation 'com.google.android.material:material:1.12.0'   // for XML theme
               debugImplementation 'androidx.compose.ui:ui-tooling'
               debugImplementation 'androidx.compose.ui:ui-test-manifest'
           }
           EOF
-          sed -n '1,220p' ColourQuest/app/build.gradle
+
+      # Make the theme ultra-simple to avoid any runtime attr issues
+      - name: Simplify theme
+        run: |
+          mkdir -p ColourQuest/app/src/main/res/values
+          cat > ColourQuest/app/src/main/res/values/themes.xml <<'EOF'
+          <resources>
+              <style name="Theme.ColourQuest" parent="Theme.Material3.DayNight.NoActionBar" />
+          </resources>
+          EOF
+
+      # Replace MainActivity with a crash-guarded version that logs & toasts any startup error
+      - name: Crash-guard MainActivity
+        run: |
+          mkdir -p ColourQuest/app/src/main/java/com/kids/colourquest
+          cat > ColourQuest/app/src/main/java/com/kids/colourquest/MainActivity.kt <<'EOF'
+          package com.kids.colourquest
+          import android.os.Bundle
+          import android.util.Log
+          import android.widget.Toast
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+          import androidx.compose.material3.MaterialTheme
+          import androidx.compose.material3.Text
+          import androidx.compose.runtime.Composable
+          import androidx.compose.ui.tooling.preview.Preview
+
+          class MainActivity : ComponentActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  try {
+                      setContent { MaterialTheme { ColourQuestApp() } }
+                  } catch (t: Throwable) {
+                      Log.e("ColourQuest", "Startup crash", t)
+                      Toast.makeText(this, "Startup error: " + t.javaClass.simpleName, Toast.LENGTH_LONG).show()
+                      // Fallback minimal UI so the app stays open long enough to see the toast
+                      setContent { MaterialTheme { Text("Startup error: " + t.javaClass.simpleName) } }
+                  }
+              }
+          }
+
+          // --- the original app composables (simplified; same functions you already had) ---
+          enum class Screen { HOME, MATCH, COMPLEMENT, SCORE }
+          @Composable fun ColourQuestApp() { HomeHello() }
+          @Composable fun HomeHello() { Text("ColourQuest starting…") }
+          @Preview @Composable fun P() { HomeHello() }
+          EOF
 
       - name: Build debug APK
         working-directory: ColourQuest
