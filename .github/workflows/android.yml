@@ -17,17 +17,31 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # Install Android SDK components (correct inputs for v3)
+      # Set up base Android SDK (no packages here)
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          packages: |
-            platform-tools
-            platforms;android-34
-            build-tools;34.0.0
+          log-accepted-android-sdk-licenses: true
 
-      # Install Gradle 8.2.1 explicitly (no wrapper needed)
+      # Install required SDK packages explicitly (separate args)
+      - name: Install Android packages
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SDKMANAGER="${ANDROID_HOME:?}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            # fallback to versioned path if "latest" isn't present
+            SDKMANAGER=$(ls -d "${ANDROID_HOME}/cmdline-tools/"*/bin 2>/dev/null | head -n1)/sdkmanager
+          fi
+          yes | "$SDKMANAGER" --licenses
+          yes | "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+          "$SDKMANAGER" --list | tail -n +1 || true
+
+      # Install Gradle 8.2.1 (project uses AGP 8.2.x)
       - name: Install Gradle via SDKMAN
         run: |
           curl -s "https://get.sdkman.io" | bash
@@ -35,10 +49,10 @@ jobs:
           sdk install gradle 8.2.1
           gradle -v
 
-      # Find your uploaded zip and unpack it
+      # Find your uploaded ZIP and unpack it
       - name: Locate and unzip upload
         run: |
-          echo "Repo root contents:" && ls -lah
+          ls -lah
           ZIP=$(ls -1 *.zip 2>/dev/null | head -n1 || true)
           if [ -z "$ZIP" ]; then
             echo "❌ No *.zip found in repo root"; exit 1
@@ -47,12 +61,10 @@ jobs:
           unzip -q "$ZIP" -d upload_content
           INNER=$(find upload_content -maxdepth 2 -type f -name '*ColourQuestProject.zip' -print -quit)
           if [ -z "$INNER" ]; then
-            echo "❌ Inner project zip not found. Zips present:" 
-            find upload_content -type f -name '*.zip' -print
-            exit 1
+            echo "❌ Inner project zip not found"; find upload_content -type f -name '*.zip' -print; exit 1
           fi
           unzip -q "$INNER" -d ColourQuest
-          echo "Project unzipped to ./ColourQuest" && ls -lah ColourQuest
+          ls -lah ColourQuest
 
       - name: Build debug APK
         working-directory: ColourQuest
