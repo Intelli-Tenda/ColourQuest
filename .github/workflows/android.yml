@@ -17,7 +17,7 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # Correct setup-android v3 usage (install SDK components via packages:)
+      # Correct setup-android v3 usage
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -27,14 +27,31 @@ jobs:
             platforms;android-34
             build-tools;34.0.0
 
-      # Modern Gradle action (uses cache automatically)
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v3
+      # Installs Gradle 8.2.1 (no wrapper in repo)
+      - name: Provision Gradle 8.2.1
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: 8.2.1
 
-      - name: Unzip project
+      # Robustly locate your uploaded ZIP and unpack
+      - name: Locate and unzip upload
         run: |
-          unzip -q ColourQuest_GitHubUploadable.zip -d upload_content
-          unzip -q upload_content/ColourQuestProject.zip -d ColourQuest
+          echo "Repo root contents:" && ls -lah
+          ZIP=$(ls -1 *.zip 2>/dev/null | head -n1 || true)
+          if [ -z "$ZIP" ]; then
+            echo "❌ No *.zip found in repo root"; exit 1
+          fi
+          echo "Found upload zip: $ZIP"
+          unzip -q "$ZIP" -d upload_content
+          ls -lah upload_content
+          INNER="upload_content/ColourQuestProject.zip"
+          if [ ! -f "$INNER" ]; then
+            echo "❌ Inner project zip not found. Listing any zips we unpacked:" 
+            find upload_content -maxdepth 2 -type f -name '*.zip' -print
+            exit 1
+          fi
+          unzip -q "$INNER" -d ColourQuest
+          echo "Project unzipped to ./ColourQuest" && ls -lah ColourQuest
 
       - name: Build debug APK
         working-directory: ColourQuest
