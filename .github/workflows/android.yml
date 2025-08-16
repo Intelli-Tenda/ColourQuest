@@ -122,7 +122,8 @@ jobs:
 
       - name: Build debug APK
         working-directory: ColourQuest
-        env: { GRADLE_BIN: ${{ env.GRADLE_BIN }} }
+        env:
+          GRADLE_BIN: ${{ env.GRADLE_BIN }}
         run: |
           "$GRADLE_BIN" :app:assembleDebug --stacktrace
 
