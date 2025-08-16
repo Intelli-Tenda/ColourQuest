@@ -1,85 +1,76 @@
-name: Build ColourQuest APK (ZIP upload)
+name: Build ColourQuest APK (stable toolchain)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      - name: Set up Android SDK (base only)
+      - name: Android SDK base
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: true
 
-      - name: Install Android SDK packages
+      - name: SDK packages
         shell: bash
         run: |
-          set -euo pipefail
-          SDKMANAGER="${ANDROID_HOME:?}/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "$SDKMANAGER" ]; then
+          set -eux
+          SDKMANAGER="${ANDROID_HOME:?}/cmdline-tools/latest/bin/sdkmanager" || true
+          if [ ! -x "${SDKMANAGER:-}" ]; then
             SDKMANAGER=$(ls -d "${ANDROID_HOME}/cmdline-tools/"*/bin 2>/dev/null | head -n1)/sdkmanager
           fi
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Install Gradle 8.2.1 (AGP 8.2.x compatible)
+      - name: Gradle 8.2.1
         shell: bash
         run: |
-          curl -s "https://get.sdkman.io" | bash
+          curl -s https://get.sdkman.io | bash
           source "$HOME/.sdkman/bin/sdkman-init.sh"
           sdk install gradle 8.2.1
           sdk use gradle 8.2.1
           echo "GRADLE_BIN=$HOME/.sdkman/candidates/gradle/8.2.1/bin/gradle" >> $GITHUB_ENV
           "$HOME/.sdkman/candidates/gradle/8.2.1/bin/gradle" -v
 
-      - name: Locate and unzip upload
+      - name: Unzip upload
         shell: bash
         run: |
-          set -euo pipefail
+          set -eux
           ZIP=$(ls -1 *.zip 2>/dev/null | head -n1)
-          [ -n "$ZIP" ] || { echo "❌ No zip found in repo root"; exit 1; }
-          echo "Using upload zip: $ZIP"
           unzip -q "$ZIP" -d upload_content
           INNER=$(find upload_content -maxdepth 2 -type f -name '*ColourQuestProject*.zip' -print -quit)
-          [ -n "$INNER" ] || { echo "❌ Inner project zip not found"; find upload_content -type f -name '*.zip' -print; exit 1; }
           unzip -q "$INNER" -d ColourQuest
           ls -lah ColourQuest
 
-      - name: Ensure gradle.properties (AndroidX + JVM)
+      - name: gradle.properties
         run: |
           cat > ColourQuest/gradle.properties <<'EOF'
           android.useAndroidX=true
           kotlin.code.style=official
           org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
           EOF
-          sed -n '1,120p' ColourQuest/gradle.properties
 
-      # 🔧 Overwrite app/build.gradle with a known-good config
-      - name: Write clean app/build.gradle
+      # Overwrite app/build.gradle with a stable setup (Kotlin 1.9.24 + Compose compiler 1.5.14)
+      - name: Write app/build.gradle (stable)
         run: |
           cat > ColourQuest/app/build.gradle <<'EOF'
           plugins {
               id 'com.android.application' version '8.2.2'
-              id 'org.jetbrains.kotlin.android' version '1.9.22'
+              id 'org.jetbrains.kotlin.android' version '1.9.24'
           }
-
           android {
               namespace 'com.kids.colourquest'
               compileSdk 34
-
               defaultConfig {
                   applicationId "com.kids.colourquest"
                   minSdk 24
@@ -88,71 +79,50 @@ jobs:
                   versionName "1.0"
                   vectorDrawables { useSupportLibrary = true }
               }
-
               buildTypes {
                   release {
                       minifyEnabled false
                       proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
                   }
-                  debug {
-                      debuggable true
-                  }
               }
-
               buildFeatures { compose true }
-
-              composeOptions {
-                  // Compose Compiler compatible with Compose 1.6.x
-                  kotlinCompilerExtensionVersion '1.5.10'
-              }
-
+              composeOptions { kotlinCompilerExtensionVersion '1.5.14' }
               kotlinOptions { jvmTarget = '17' }
-
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
-
-              packaging {
-                  resources {
-                      excludes += '/META-INF/{AL2.0,LGPL2.1}'
-                  }
-              }
+              packaging { resources { excludes += '/META-INF/{AL2.0,LGPL2.1}' } }
           }
-
-          // Extra guard to force Java 17 even if something overrides compileOptions
+          // Hard-enforce Java 17 for any Java tasks
           tasks.withType(JavaCompile).configureEach {
               sourceCompatibility = JavaVersion.VERSION_17
               targetCompatibility = JavaVersion.VERSION_17
               if (it.options.hasProperty("release")) it.options.release = 17
           }
-
           dependencies {
-              // Compose BOM pins all androidx.compose libs to compatible versions
-              implementation platform('androidx.compose:compose-bom:2024.02.01')
+              // Compose 1.6.8 via BOM
+              implementation platform('androidx.compose:compose-bom:2024.06.00')
               implementation 'androidx.compose.ui:ui'
               implementation 'androidx.compose.ui:ui-tooling-preview'
               implementation 'androidx.compose.material3:material3'
 
               implementation 'androidx.activity:activity-compose:1.9.3'
-              implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.3'
+              implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.4'
               implementation 'androidx.core:core-ktx:1.13.1'
 
-              // Needed by XML theme (Theme.Material3.*)
+              // XML theme needs MDC (Theme.Material3.*)
               implementation 'com.google.android.material:material:1.12.0'
 
               debugImplementation 'androidx.compose.ui:ui-tooling'
               debugImplementation 'androidx.compose.ui:ui-test-manifest'
           }
           EOF
-
-          echo "==== app/build.gradle (first 200 lines) ===="
-          sed -n '1,200p' ColourQuest/app/build.gradle
+          sed -n '1,220p' ColourQuest/app/build.gradle
 
       - name: Build debug APK
         working-directory: ColourQuest
-        env:
-          GRADLE_BIN: ${{ env.GRADLE_BIN }}
+        env: { GRADLE_BIN: ${{ env.GRADLE_BIN }} }
         run: |
           "$GRADLE_BIN" :app:assembleDebug --stacktrace
 
