@@ -48,12 +48,10 @@ jobs:
         shell: bash
         run: |
           set -eux
-          ls -lah
           ZIP=$(ls -1 *.zip 2>/dev/null | head -n1)
           echo "Found upload zip: $ZIP"
           unzip -q "$ZIP" -d upload_content
           INNER=$(find upload_content -maxdepth 2 -type f -name '*ColourQuestProject*.zip' -print -quit)
-          echo "Inner project zip: ${INNER:-NOT FOUND}"
           unzip -q "$INNER" -d ColourQuest
           ls -lah ColourQuest
 
@@ -66,7 +64,7 @@ jobs:
           EOF
           sed -n '1,200p' ColourQuest/gradle.properties
 
-      # Safety patch (won't duplicate if already present)
+      # Ensure Material Components (needed by Theme.Material3.* in XML)
       - name: Ensure Material Components dependency
         run: |
           FILE="ColourQuest/app/build.gradle"
@@ -78,9 +76,30 @@ jobs:
                 print "    implementation '\''com.google.android.material:material:1.12.0'\''"
                 added=1
               }
-            ' "$FILE" > /tmp/gradle.patched && mv /tmp/gradle.patched "$FILE"
+            ' "$FILE" > /tmp/p && mv /tmp/p "$FILE"
           fi
           sed -n "/dependencies[[:space:]]*{/,/}/p" "$FILE"
+
+      # 🔧 Force Java 17 for Java compilation to match Kotlin 17
+      - name: Ensure Java 17 compileOptions
+        run: |
+          FILE="ColourQuest/app/build.gradle"
+          if ! grep -q "compileOptions" "$FILE"; then
+            # Insert compileOptions right after 'android {'
+            awk '
+              BEGIN{done=0}
+              /android[[:space:]]*\{/ && !done {
+                print; print "    compileOptions {"; print "        sourceCompatibility JavaVersion.VERSION_17";
+                print "        targetCompatibility JavaVersion.VERSION_17"; print "    }"; done=1; next
+              }
+              {print}
+            ' "$FILE" > /tmp/p && mv /tmp/p "$FILE"
+          else
+            # Replace any 1.8 with 17 if present
+            sed -i 's/JavaVersion.VERSION_1_8/JavaVersion.VERSION_17/g' "$FILE"
+          fi
+          echo "---- android block ----"
+          sed -n "/android[[:space:]]*{/,/buildTypes[[:space:]]*{/p" "$FILE"
 
       - name: Build debug APK
         working-directory: ColourQuest
