@@ -49,8 +49,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Repo root:"
-          ls -lah
           ZIP=$(ls -1 *.zip 2>/dev/null | head -n1)
           [ -n "$ZIP" ] || { echo "❌ No zip found in repo root"; exit 1; }
           echo "Using upload zip: $ZIP"
@@ -58,7 +56,6 @@ jobs:
           INNER=$(find upload_content -maxdepth 2 -type f -name '*ColourQuestProject*.zip' -print -quit)
           [ -n "$INNER" ] || { echo "❌ Inner project zip not found"; find upload_content -type f -name '*.zip' -print; exit 1; }
           unzip -q "$INNER" -d ColourQuest
-          echo "Project files:"
           ls -lah ColourQuest
 
       - name: Ensure gradle.properties (AndroidX + JVM)
@@ -68,15 +65,14 @@ jobs:
           kotlin.code.style=official
           org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
           EOF
-          sed -n '1,120p' ColourQuest/gradle.properties
 
-      - name: Patch app/build.gradle (Material, Compose, Java 17)
+      - name: Patch app/build.gradle (Material, Compose, Java 17 everywhere)
         run: |
           FILE="ColourQuest/app/build.gradle"
-          echo ">>> Before patch:"
-          sed -n '1,220p' "$FILE"
+          echo ">>> Before patch (first 200 lines):"
+          sed -n '1,200p' "$FILE" || true
 
-          # 1) Ensure Material Components (XML Theme.Material3.* relies on it)
+          # 1) Material Components (XML Theme.Material3.* needs it)
           if ! grep -q "com.google.android.material:material" "$FILE"; then
             awk 'BEGIN{a=0}{print}/dependencies[[:space:]]*\\{/&&a==0{print "    implementation '\''com.google.android.material:material:1.12.0'\''";a=1}' "$FILE" > /tmp/p && mv /tmp/p "$FILE"
           fi
@@ -84,20 +80,45 @@ jobs:
           # 2) Align Compose compiler with Compose 1.6.x
           sed -i "s/kotlinCompilerExtensionVersion[^']*'[^']*'/kotlinCompilerExtensionVersion '1.5.10'/" "$FILE"
 
-          # 3) Nudge a couple libs for Android 15 stability
+          # 3) Recent libs for Android 15 stability
           sed -i "s/androidx.activity:activity-compose:[0-9A-Za-z_.-]*/androidx.activity:activity-compose:1.9.3/" "$FILE" || true
           sed -i "s/androidx.lifecycle:lifecycle-runtime-ktx:[0-9A-Za-z_.-]*/androidx.lifecycle:lifecycle-runtime-ktx:2.8.3/" "$FILE" || true
 
-          # 4) Force Java 17 for Java sources (Kotlin already uses jvmTarget 17)
+          # 4) Force Java 17 in the Android DSL
           if grep -q "compileOptions" "$FILE"; then
             sed -i 's/JavaVersion.VERSION_1_8/JavaVersion.VERSION_17/g' "$FILE"
           else
-            awk 'BEGIN{d=0}/android[[:space:]]*\\{/{print; if(d==0){print "    compileOptions {\\n        sourceCompatibility JavaVersion.VERSION_17\\n        targetCompatibility JavaVersion.VERSION_17\\n    }"; d=1; next}}{print}' "$FILE" > /tmp/q && mv /tmp/q "$FILE"
+            awk 'BEGIN{ins=0}/^[[:space:]]*android[[:space:]]*\\{/{print; if(ins==0){print "    compileOptions {\\n        sourceCompatibility JavaVersion.VERSION_17\\n        targetCompatibility JavaVersion.VERSION_17\\n    }"; ins=1; next}}{print}' "$FILE" > /tmp/q && mv /tmp/q "$FILE"
           fi
 
-          echo ">>> After patch (android + dependencies):"
-          sed -n "/android[[:space:]]*{/,/}/p" "$FILE" | sed -n '1,200p'
-          sed -n "/dependencies[[:space:]]*{/,/}/p" "$FILE"
+          # 5) Ensure Kotlin is also 17 (safety in case missing)
+          if grep -q "kotlinOptions" "$FILE"; then
+            sed -i "s/jvmTarget *= *'[^']*'/jvmTarget = '17'/" "$FILE" || true
+            sed -i 's/jvmTarget *= *"[^"]*"/jvmTarget = "17"/' "$FILE" || true
+          else
+            awk 'BEGIN{done=0}/^[[:space:]]*android[[:space:]]*\\{/{print; next}1' "$FILE" > /tmp/t && mv /tmp/t "$FILE"
+            # (Your original file already has kotlinOptions with jvmTarget=17; this block is a no-op.)
+          fi
+
+          # 6) Absolute enforcement via tasks (covers any edge cases)
+          #    This ensures Javac truly uses 17 even if something overrides compileOptions.
+          if ! grep -q "tasks.withType(JavaCompile)" "$FILE"; then
+            cat >> "$FILE" <<'EOS'
+
+          // --- Enforce Java 17 for all Java compilation tasks ---
+          tasks.withType(JavaCompile).configureEach {
+              sourceCompatibility = JavaVersion.VERSION_17
+              targetCompatibility = JavaVersion.VERSION_17
+              if (it.options.hasProperty("release")) {
+                  it.options.release = 17
+              }
+          }
+          EOS
+          fi
+
+          echo ">>> After patch (android & dependencies excerpts):"
+          sed -n "/android[[:space:]]*{/,/buildTypes[[:space:]]*{/p" "$FILE" || true
+          sed -n "/dependencies[[:space:]]*{/,/}/p" "$FILE" || true
 
       - name: Build debug APK
         working-directory: ColourQuest
