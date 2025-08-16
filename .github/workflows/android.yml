@@ -17,7 +17,7 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # Correct setup-android v3 usage
+      # Install Android SDK components (correct inputs for v3)
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -27,13 +27,15 @@ jobs:
             platforms;android-34
             build-tools;34.0.0
 
-      # Installs Gradle 8.2.1 (no wrapper in repo)
-      - name: Provision Gradle 8.2.1
-        uses: gradle/gradle-build-action@v3
-        with:
-          gradle-version: 8.2.1
+      # Install Gradle 8.2.1 explicitly (no wrapper needed)
+      - name: Install Gradle via SDKMAN
+        run: |
+          curl -s "https://get.sdkman.io" | bash
+          source "$HOME/.sdkman/bin/sdkman-init.sh"
+          sdk install gradle 8.2.1
+          gradle -v
 
-      # Robustly locate your uploaded ZIP and unpack
+      # Find your uploaded zip and unpack it
       - name: Locate and unzip upload
         run: |
           echo "Repo root contents:" && ls -lah
@@ -43,11 +45,10 @@ jobs:
           fi
           echo "Found upload zip: $ZIP"
           unzip -q "$ZIP" -d upload_content
-          ls -lah upload_content
-          INNER="upload_content/ColourQuestProject.zip"
-          if [ ! -f "$INNER" ]; then
-            echo "❌ Inner project zip not found. Listing any zips we unpacked:" 
-            find upload_content -maxdepth 2 -type f -name '*.zip' -print
+          INNER=$(find upload_content -maxdepth 2 -type f -name '*ColourQuestProject.zip' -print -quit)
+          if [ -z "$INNER" ]; then
+            echo "❌ Inner project zip not found. Zips present:" 
+            find upload_content -type f -name '*.zip' -print
             exit 1
           fi
           unzip -q "$INNER" -d ColourQuest
