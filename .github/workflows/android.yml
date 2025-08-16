@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -17,7 +18,7 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Set up Android SDK
+      - name: Set up Android SDK (base only)
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
@@ -26,16 +27,15 @@ jobs:
       - name: Install Android SDK packages
         shell: bash
         run: |
-          set -eux
-          SDKMANAGER="${ANDROID_HOME:?}/cmdline-tools/latest/bin/sdkmanager" || true
-          if [ ! -x "${SDKMANAGER:-}" ]; then
+          set -euo pipefail
+          SDKMANAGER="${ANDROID_HOME:?}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
             SDKMANAGER=$(ls -d "${ANDROID_HOME}/cmdline-tools/"*/bin 2>/dev/null | head -n1)/sdkmanager
           fi
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER\
-          " "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Install Gradle 8.2.1
+      - name: Install Gradle 8.2.1 (AGP 8.2.x compatible)
         shell: bash
         run: |
           curl -s "https://get.sdkman.io" | bash
@@ -48,14 +48,17 @@ jobs:
       - name: Locate and unzip upload
         shell: bash
         run: |
-          set -eux
-          echo "Repo files:" && ls -lah
+          set -euo pipefail
+          echo "Repo root:"
+          ls -lah
           ZIP=$(ls -1 *.zip 2>/dev/null | head -n1)
-          echo "Found upload zip: $ZIP"
+          [ -n "$ZIP" ] || { echo "❌ No zip found in repo root"; exit 1; }
+          echo "Using upload zip: $ZIP"
           unzip -q "$ZIP" -d upload_content
           INNER=$(find upload_content -maxdepth 2 -type f -name '*ColourQuestProject*.zip' -print -quit)
-          echo "Inner project zip: $INNER"
+          [ -n "$INNER" ] || { echo "❌ Inner project zip not found"; find upload_content -type f -name '*.zip' -print; exit 1; }
           unzip -q "$INNER" -d ColourQuest
+          echo "Project files:"
           ls -lah ColourQuest
 
       - name: Ensure gradle.properties (AndroidX + JVM)
@@ -67,25 +70,33 @@ jobs:
           EOF
           sed -n '1,120p' ColourQuest/gradle.properties
 
-      - name: Patch app/build.gradle for stability (Material, Compose, Java 17)
+      - name: Patch app/build.gradle (Material, Compose, Java 17)
         run: |
           FILE="ColourQuest/app/build.gradle"
-          # Add Material Components (needed by Theme.Material3.* in XML)
+          echo ">>> Before patch:"
+          sed -n '1,220p' "$FILE"
+
+          # 1) Ensure Material Components (XML Theme.Material3.* relies on it)
           if ! grep -q "com.google.android.material:material" "$FILE"; then
             awk 'BEGIN{a=0}{print}/dependencies[[:space:]]*\\{/&&a==0{print "    implementation '\''com.google.android.material:material:1.12.0'\''";a=1}' "$FILE" > /tmp/p && mv /tmp/p "$FILE"
           fi
-          # Align Compose compiler with Kotlin 1.9.22 / Compose 1.6.x
+
+          # 2) Align Compose compiler with Compose 1.6.x
           sed -i "s/kotlinCompilerExtensionVersion[^']*'[^']*'/kotlinCompilerExtensionVersion '1.5.10'/" "$FILE"
-          # Modernize a couple of libs for Android 15
-          sed -i "s/androidx.activity:activity-compose:[0-9.\\-]*/androidx.activity:activity-compose:1.9.3/" "$FILE" || true
-          sed -i "s/androidx.lifecycle:lifecycle-runtime-ktx:[0-9.\\-]*/androidx.lifecycle:lifecycle-runtime-ktx:2.8.3/" "$FILE" || true
-          # Force Java 17 for Java sources (matches Kotlin jvmTarget=17)
+
+          # 3) Nudge a couple libs for Android 15 stability
+          sed -i "s/androidx.activity:activity-compose:[0-9A-Za-z_.-]*/androidx.activity:activity-compose:1.9.3/" "$FILE" || true
+          sed -i "s/androidx.lifecycle:lifecycle-runtime-ktx:[0-9A-Za-z_.-]*/androidx.lifecycle:lifecycle-runtime-ktx:2.8.3/" "$FILE" || true
+
+          # 4) Force Java 17 for Java sources (Kotlin already uses jvmTarget 17)
           if grep -q "compileOptions" "$FILE"; then
             sed -i 's/JavaVersion.VERSION_1_8/JavaVersion.VERSION_17/g' "$FILE"
           else
             awk 'BEGIN{d=0}/android[[:space:]]*\\{/{print; if(d==0){print "    compileOptions {\\n        sourceCompatibility JavaVersion.VERSION_17\\n        targetCompatibility JavaVersion.VERSION_17\\n    }"; d=1; next}}{print}' "$FILE" > /tmp/q && mv /tmp/q "$FILE"
           fi
-          echo "---- Dependencies block ----"
+
+          echo ">>> After patch (android + dependencies):"
+          sed -n "/android[[:space:]]*{/,/}/p" "$FILE" | sed -n '1,200p'
           sed -n "/dependencies[[:space:]]*{/,/}/p" "$FILE"
 
       - name: Build debug APK
