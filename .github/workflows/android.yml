@@ -23,7 +23,7 @@ jobs:
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: true
 
-      - name: Install Android packages
+      - name: Install Android SDK packages
         shell: bash
         run: |
           set -eux
@@ -32,7 +32,8 @@ jobs:
             SDKMANAGER=$(ls -d "${ANDROID_HOME}/cmdline-tools/"*/bin 2>/dev/null | head -n1)/sdkmanager
           fi
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          "$SDKMANAGER\
+          " "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Install Gradle 8.2.1
         shell: bash
@@ -48,37 +49,44 @@ jobs:
         shell: bash
         run: |
           set -eux
+          echo "Repo files:" && ls -lah
           ZIP=$(ls -1 *.zip 2>/dev/null | head -n1)
+          echo "Found upload zip: $ZIP"
           unzip -q "$ZIP" -d upload_content
           INNER=$(find upload_content -maxdepth 2 -type f -name '*ColourQuestProject*.zip' -print -quit)
+          echo "Inner project zip: $INNER"
           unzip -q "$INNER" -d ColourQuest
           ls -lah ColourQuest
 
-      # Ensure AndroidX and sane JVM args
-      - name: Ensure gradle.properties
+      - name: Ensure gradle.properties (AndroidX + JVM)
         run: |
           cat > ColourQuest/gradle.properties <<'EOF'
           android.useAndroidX=true
           kotlin.code.style=official
           org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
           EOF
+          sed -n '1,120p' ColourQuest/gradle.properties
 
-      # ✅ Patch build.gradle to a stable Compose toolchain for Android 15
-      - name: Align Compose versions (fix launch crash)
+      - name: Patch app/build.gradle for stability (Material, Compose, Java 17)
         run: |
           FILE="ColourQuest/app/build.gradle"
-          # 1) Make sure Material Components is present (for the XML theme)
+          # Add Material Components (needed by Theme.Material3.* in XML)
           if ! grep -q "com.google.android.material:material" "$FILE"; then
             awk 'BEGIN{a=0}{print}/dependencies[[:space:]]*\\{/&&a==0{print "    implementation '\''com.google.android.material:material:1.12.0'\''";a=1}' "$FILE" > /tmp/p && mv /tmp/p "$FILE"
           fi
-          # 2) Bump Compose compiler to a version compatible with Compose 1.6.*
+          # Align Compose compiler with Kotlin 1.9.22 / Compose 1.6.x
           sed -i "s/kotlinCompilerExtensionVersion[^']*'[^']*'/kotlinCompilerExtensionVersion '1.5.10'/" "$FILE"
-          # 3) Force Java 17 for Java sources to match Kotlin
-          if ! grep -q "compileOptions" "$FILE"; then
-            awk 'BEGIN{d=0}/android[[:space:]]*\\{/{print; if(d==0){print "    compileOptions {\\n        sourceCompatibility JavaVersion.VERSION_17\\n        targetCompatibility JavaVersion.VERSION_17\\n    }"; d=1; next}}{print}' "$FILE" > /tmp/p && mv /tmp/p "$FILE"
-          else
+          # Modernize a couple of libs for Android 15
+          sed -i "s/androidx.activity:activity-compose:[0-9.\\-]*/androidx.activity:activity-compose:1.9.3/" "$FILE" || true
+          sed -i "s/androidx.lifecycle:lifecycle-runtime-ktx:[0-9.\\-]*/androidx.lifecycle:lifecycle-runtime-ktx:2.8.3/" "$FILE" || true
+          # Force Java 17 for Java sources (matches Kotlin jvmTarget=17)
+          if grep -q "compileOptions" "$FILE"; then
             sed -i 's/JavaVersion.VERSION_1_8/JavaVersion.VERSION_17/g' "$FILE"
+          else
+            awk 'BEGIN{d=0}/android[[:space:]]*\\{/{print; if(d==0){print "    compileOptions {\\n        sourceCompatibility JavaVersion.VERSION_17\\n        targetCompatibility JavaVersion.VERSION_17\\n    }"; d=1; next}}{print}' "$FILE" > /tmp/q && mv /tmp/q "$FILE"
           fi
+          echo "---- Dependencies block ----"
+          sed -n "/dependencies[[:space:]]*{/,/}/p" "$FILE"
 
       - name: Build debug APK
         working-directory: ColourQuest
