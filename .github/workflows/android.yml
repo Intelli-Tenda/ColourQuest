@@ -17,14 +17,13 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # Base Android SDK only; we’ll install packages ourselves below
+      # Base SDK only; we install packages explicitly
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: true
 
-      # Install required SDK packages (no pipefail issues)
       - name: Install Android packages
         shell: bash
         run: |
@@ -33,20 +32,23 @@ jobs:
           if [ ! -x "$SDKMANAGER" ]; then
             SDKMANAGER=$(ls -d "${ANDROID_HOME}/cmdline-tools/"*/bin 2>/dev/null | head -n1)/sdkmanager
           fi
-          # Accept licenses (non-interactive)
+          # Accept licenses non-interactively
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          # Install packages as separate args (no 'yes |' needed now)
+          # Install required components
           "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      # Install Gradle 8.2.1 (AGP 8.2.x compatible)
-      - name: Install Gradle via SDKMAN
+      # Install and USE Gradle 8.2.1 (compatible with AGP 8.2.x)
+      - name: Install Gradle 8.2.1
+        shell: bash
         run: |
           curl -s "https://get.sdkman.io" | bash
           source "$HOME/.sdkman/bin/sdkman-init.sh"
           sdk install gradle 8.2.1
-          gradle -v
+          sdk use gradle 8.2.1
+          echo "GRADLE_BIN=$HOME/.sdkman/candidates/gradle/8.2.1/bin/gradle" >> $GITHUB_ENV
+          $HOME/.sdkman/candidates/gradle/8.2.1/bin/gradle -v
 
-      # Find your uploaded ZIP and unpack it
+      # Find your upload ZIP and unzip inner project
       - name: Locate and unzip upload
         run: |
           ls -lah
@@ -54,7 +56,6 @@ jobs:
           if [ -z "$ZIP" ]; then
             echo "❌ No *.zip found in repo root"; exit 1
           fi
-          echo "Found upload zip: $ZIP"
           unzip -q "$ZIP" -d upload_content
           INNER=$(find upload_content -maxdepth 2 -type f -name '*ColourQuestProject.zip' -print -quit)
           if [ -z "$INNER" ]; then
@@ -63,9 +64,23 @@ jobs:
           unzip -q "$INNER" -d ColourQuest
           ls -lah ColourQuest
 
+      # Add gradle.properties so AndroidX is enabled
+      - name: Ensure gradle.properties (AndroidX)
+        run: |
+          cat > ColourQuest/gradle.properties <<'EOF'
+          android.useAndroidX=true
+          kotlin.code.style=official
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          EOF
+          echo "== gradle.properties =="
+          cat ColourQuest/gradle.properties
+
       - name: Build debug APK
         working-directory: ColourQuest
-        run: gradle :app:assembleDebug --stacktrace
+        env:
+          GRADLE_BIN: ${{ env.GRADLE_BIN }}
+        run: |
+          "$GRADLE_BIN" :app:assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
