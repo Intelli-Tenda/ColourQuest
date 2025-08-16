@@ -1,32 +1,45 @@
 name: Build ColourQuest APK (ZIP upload)
+
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
+
+      # Correct setup-android v3 usage (install SDK components via packages:)
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          api-level: 34
-          build-tools: 34.0.0
-      - name: Provision Gradle 8.2.1
-        uses: gradle/gradle-build-action@v3
-        with:
-          gradle-version: 8.2.1
+          accept-android-sdk-licenses: true
+          packages: |
+            platform-tools
+            platforms;android-34
+            build-tools;34.0.0
+
+      # Modern Gradle action (uses cache automatically)
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
       - name: Unzip project
-        run: unzip -q ColourQuest_GitHubUploadable.zip -d upload_content && unzip -q upload_content/ColourQuestProject.zip -d ColourQuest
+        run: |
+          unzip -q ColourQuest_GitHubUploadable.zip -d upload_content
+          unzip -q upload_content/ColourQuestProject.zip -d ColourQuest
+
       - name: Build debug APK
         working-directory: ColourQuest
         run: gradle :app:assembleDebug --stacktrace
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
