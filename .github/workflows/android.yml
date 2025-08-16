@@ -17,31 +17,28 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # Set up base Android SDK (no packages here)
+      # Base Android SDK only; we’ll install packages ourselves below
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: true
 
-      # Install required SDK packages explicitly (separate args)
+      # Install required SDK packages (no pipefail issues)
       - name: Install Android packages
         shell: bash
         run: |
-          set -euxo pipefail
+          set -eux
           SDKMANAGER="${ANDROID_HOME:?}/cmdline-tools/latest/bin/sdkmanager"
           if [ ! -x "$SDKMANAGER" ]; then
-            # fallback to versioned path if "latest" isn't present
             SDKMANAGER=$(ls -d "${ANDROID_HOME}/cmdline-tools/"*/bin 2>/dev/null | head -n1)/sdkmanager
           fi
-          yes | "$SDKMANAGER" --licenses
-          yes | "$SDKMANAGER" \
-            "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
-          "$SDKMANAGER" --list | tail -n +1 || true
+          # Accept licenses (non-interactive)
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          # Install packages as separate args (no 'yes |' needed now)
+          "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      # Install Gradle 8.2.1 (project uses AGP 8.2.x)
+      # Install Gradle 8.2.1 (AGP 8.2.x compatible)
       - name: Install Gradle via SDKMAN
         run: |
           curl -s "https://get.sdkman.io" | bash
